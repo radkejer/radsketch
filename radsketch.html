@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    html{
+      font: 1.0rem sans-serif;
+      margin: 5px 5px;
+    }
+
+    button {
+      background-color: #fff;
+      border: 1px solid black;
+      color: black;
+      padding: 5px 5px;
+      text-align: center;
+      text-decoration: none;
+      font-size: 14px;
+      margin: 2px 2px;
+      cursor: pointer;
+      width: 78px;
+    }
+    button:hover{background-color:orange;}
+    .red {
+        background-color: #ff0000;
+    }
+    .toolbar {
+      background-color: #fff;
+      float: left;
+      width: 85px;
+    }
+    .main {
+      float: left;
+      padding: 5px;
+      cursor:crosshair;
+      background-image: url("grid.png");
+      background-repeat: repeat-x repeat-y;
+    }
+    .row:after {
+      content: "";
+      display: table;
+      clear: both;
+    }
+
+  </style>
+  <script type ="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+  <script type ="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+
+  <title>RadSketch</title>
+</head>
+
+<body>
+
+    <div class="row">
+ Import Back Image <input type="file" id="background"><br/>
+ Import Image <input type="file" id="imgLoader"> <br/>
+      <input type="color" id="pencolor" name="pencolor" value="#000000" style="width: 80px;">
+      Pen Width <input value="1" id="penwidth" type="number" style="width: 50px;"> <br/>
+      <div class="toolbar" style="background-color:#fff;">
+        <button id="select" class="buttongroup" value="sel">Select</button>
+        <button id="draw" class="buttongroup" value="line">Line</button>
+        <button id="pencil" class="buttongroup" value="curve">Pencil</button>
+        <button id="polyline" class="buttongroup" value="poly">Polyline</button>
+        <button id="polygon" class="buttongroup" value="poly">Polygon</button>
+        <button id="edit" class="buttongroup" value="edit">Edit Poly</button>
+        <button id="circle" class="buttongroup" value="circle">Circle</button>
+        <button id="rect" class="buttongroup" value="rect">Rect</button>
+        <button id="text" class="buttongroup" value="text">Text</button><br/>
+        <button id="delete">Delete selected object(s)</button>
+        <button id="reset">Reset Pan/Zoom</button>
+        <button onclick="download()">Download SVG</button>
+      </div>
+      <div id="canvasWrapper" class="main">
+        <canvas id="canvasid" class="canvas" width="800" height="800" ></canvas>
+        <label>For Polyline/Polygon: After Last Point, Press Enter or Escape Key to Finish</label>
+      </div>
+    </div>
+
+
+<script type="text/javascript">
+var pencolor = "#000";
+var penwidth = 1;
+var line,isDown,mode;
+var canvasScale = 1;
+var poly = null;
+var polyPoints = [];
+var lines = [];
+var lineCounter = 0;
+var polymode = "";
+var isPolygon=false;
+var isLine=false;
+
+function Point(x, y) {
+    this.x = x;
+    this.y = y;
+}
+
+var canvasWrapper = document.getElementById('canvasWrapper');
+
+var canvas = new fabric.Canvas('canvasid');
+
+canvas.perPixelTargetFind = true;
+canvas.targetFindTolerance = 4;
+canvas.backgroundColor = null;
+canvas.defaultCursor = 'crosshair';
+canvas.renderAll();
+
+const vt0=canvas.viewportTransform;
+
+$( "#pencolor" ).on( "change", function() {
+    pencolor = this.value;
+    canvas.freeDrawingBrush.color = pencolor;
+});
+
+$( "#penwidth" ).on( "change", function() {
+    penwidth = this.value;
+    canvas.freeDrawingBrush.width = penwidth;
+});
+
+function buttongrouphandler(event){
+    const bgtgt = event.target.closest('.buttongroup')
+    if (!bgtgt || !event.target.value) return;
+    var buttongroup = document.getElementsByClassName("buttongroup");
+    for (var i = 0; i < buttongroup.length; i++) {
+        buttongroup[i].className = buttongroup[i].className.replace(" red", ""); 
+    }
+    bgtgt.className += " red";
+}
+
+document.getElementById('background').addEventListener("change", function(e) {
+   var file = e.target.files[0];
+   var reader = new FileReader();
+   reader.onload = function(f) {
+      var data = f.target.result;
+      fabric.Image.fromURL(data, function(img) {
+         canvas.setBackgroundImage(img, canvas.renderAll.bind(canvas), {
+            scaleX: 1,
+            scaleY: 1
+         });
+        if(canvas.width < canvas.backgroundImage.width){
+            canvas.setWidth(canvas.backgroundImage.width);
+        }
+        if(canvas.height < canvas.backgroundImage.height){
+            canvas.setHeight(canvas.backgroundImage.height);
+        }
+      });
+   };
+   reader.readAsDataURL(file);
+});
+
+document.getElementById('imgLoader').addEventListener("change", function (e) {
+  var file = e.target.files[0];
+  var reader = new FileReader();
+  reader.onload = function (f) {
+    var data = f.target.result;                    
+    fabric.Image.fromURL(data, function (img) {
+      canvas.add(img).renderAll();
+      var a = canvas.setActiveObject(img);
+      var dataURL = canvas.toDataURL({format: 'png', quality: 0.8});
+    });
+  };
+  reader.readAsDataURL(file);
+});
+
+$("#select").click(function(event){
+    buttongrouphandler(event);
+    canvas.isDrawingMode = false;
+    canvas.selection=true;
+    canvas.renderAll();
+    mode="";
+});
+
+$("#draw").click(function(){
+    buttongrouphandler(event);
+    canvas.isDrawingMode = false;
+    canvas.selection=false;
+    mode="line";
+});
+
+$("#pencil").click(function(){
+    buttongrouphandler(event);
+    mode="";
+    canvas.selection=false;
+    canvas.isDrawingMode = true;
+    canvas.freeDrawingBrush.color = pencolor;
+    canvas.freeDrawingBrush.width = penwidth;
+    mode="pencil";
+});
+
+$("#polygon").click(function () {
+    buttongrouphandler(event);
+    mode="";
+    canvas.selection=false;
+    canvas.isDrawingMode = false;
+    isPolygon = true;
+    isLine = false;
+    startPoly();
+});
+
+$("#polyline").click(function () {
+    buttongrouphandler(event);
+    mode="";
+    canvas.selection=false;
+    canvas.isDrawingMode = false;
+    isPolygon = false;
+    isLine = false;
+    startPoly();
+});
+
+$("#circle").click(function () {
+    mode="";
+    buttongrouphandler(event);
+    canvas.add(new fabric.Circle({radius:30,top:150,left:150,stroke:pencolor,fill:'#fff',opacity:.5}));
+});
+
+$("#rect").click(function () {
+    mode="";
+    buttongrouphandler(event);
+    const rect = new fabric.Rect({top:100,left:100,width:60,height:70,selection:false,stroke:pencolor,fill:'#fff',opacity:.5});
+    canvas.add(rect);
+});
+
+$("#text").click(function () {
+    mode="";
+    buttongrouphandler(event);
+    const t1 = new fabric.Textbox('Text', {top: 5,left: 5,fontSize: 16,textAlign: 'left'});
+    canvas.add(t1);
+});
+
+$("#edit").click(function(){
+    canvas.selection=false;
+    canvas.isDrawingMode = false;
+    mode="";
+    polymode == "";
+    Edit();
+});
+
+$("#delete").click(function(){
+    deleteObjects();
+    mode="";
+});
+
+$("#reset").click(function(){
+    onResetZoom();
+});
+
+$(canvasWrapper).mousedown(startPan);
+
+function download() {
+    var trsvg = canvas.toSVG();
+    var blob = new Blob([trsvg], {type: "image/svg+xml;charset=utf-8"});
+    const a = document.createElement('a')
+    a.setAttribute("href", window.URL.createObjectURL(blob));
+    a.setAttribute("download", "export.svg");
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+}
+
+document.onkeydown = function(e) {
+    switch (e.keyCode) {
+      case 13: // "enter" or "carriage return"
+      case 27: // "escape"
+        finishPoly();
+    }
+}
+
+function startPoly()
+{
+    polyPoints = [];
+    lines = [];
+    polymode = "poly"; // poly type
+}
+
+function finishPoly()
+{
+    if (polymode == "poly") {
+        polymode = "";
+        lines.forEach(function(value, index, ar){
+             canvas.remove(value);
+        });
+        poly = makePoly(polyPoints);
+        canvas.add(poly);
+        canvas.renderAll();
+        polyPoints = [];
+        lines = [];
+        lineCounter = 0;
+    }
+}
+
+canvas.on('mouse:down', function(o){
+    isDown = true;
+    var pointer = canvas.getPointer(o.e);
+    var points = [ pointer.x, pointer.y, pointer.x, pointer.y ];
+    if(mode=="line"){
+        line = new fabric.Line(points, {strokeWidth:penwidth,fill:pencolor,
+            stroke:pencolor,originX:'center',originY:'center' });
+        canvas.add(line);
+    }else if (mode==""){
+        if(polymode == "poly") {
+            canvas.selection = false;
+            polyPoints.push(new Point(pointer.x, pointer.y));
+            lines.push(new fabric.Line(points,{strokeWidth: 1,selectable: false,stroke: 'red'}));
+            canvas.add(lines[lineCounter]);
+            lineCounter++;
+            canvas.on('mouse:up', function (o) {
+                canvas.selection = true;
+            });
+            if(isLine && lines.length==2){
+                finishPoly();
+            }
+        }
+    }
+});
+ 
+canvas.on('mouse:move', function(o){
+    var pointer = canvas.getPointer(o.e);
+    if(mode=="line"){
+        if (!isDown) return;
+        line.set({ x2: pointer.x, y2: pointer.y });
+        canvas.renderAll();
+    }else if (mode==""){
+        if (lines[0] !== null && lines[0] !== undefined && polymode == "poly") {
+            lines[lineCounter - 1].set({x2: pointer.x,y2: pointer.y});
+            canvas.renderAll();
+        }
+    }
+});
+
+canvas.on('mouse:up', function(o){
+    isDown = false;
+    if(mode=="line"){
+        line.setCoords();
+    }
+});
+
+canvas.on('mouse:wheel', function(opt) {
+    var delta = opt.e.deltaY;
+    var zoom = canvas.getZoom();
+    zoom *= 0.999 ** delta;
+    if (zoom > 20) zoom = 20;
+    if (zoom < 0.01) zoom = 0.01;
+    canvas.zoomToPoint({ x: opt.e.offsetX, y: opt.e.offsetY }, zoom);
+    canvasScale = zoom;
+    opt.e.preventDefault();
+    opt.e.stopPropagation();
+});
+
+// Handle right-button clicks.
+function startPan(event) {
+    if (event.button != 2) {
+      return;
+    }
+    var x0 = event.screenX,y0 = event.screenY;
+    function continuePan(event) {
+      var x = event.screenX,y = event.screenY;
+      canvas.relativePan({ x: x - x0, y: y - y0 });
+      x0 = x;
+      y0 = y;
+    }
+    function stopPan(event) {
+      $(window).off('mousemove', continuePan);
+      $(window).off('mouseup', stopPan);
+    };
+    $(window).mousemove(continuePan);
+    $(window).mouseup(stopPan);
+    $(window).contextmenu(cancelMenu);
+};
+
+function cancelMenu() {
+    $(window).off('contextmenu', cancelMenu);
+    return false;
+}
+
+function deleteObjects(){
+    var objectsInGroup = canvas.getActiveObjects();
+    objectsInGroup.forEach(function(object) {canvas.remove(object);});
+}
+
+var onResetZoom = function () {
+    canvas.viewportTransform = vt0;
+    canvas.requestRenderAll();
+}
+
+function makePoly(polyPoints) {
+    var poly;
+    if(isPolygon){
+        poly = new fabric.Polygon(polyPoints, {fill:'rgba(0,0,0,0)',stroke:pencolor,strokeWidth: penwidth,objectCaching:false});
+    }else{
+        poly = new fabric.Polyline(polyPoints, {fill:'rgba(0,0,0,0)',stroke:pencolor,strokeWidth: penwidth,objectCaching:false});
+    }
+    return poly;
+}
+
+// define a function that can locate the controls.
+// this function will be used both for drawing and for interaction.
+function polygonPositionHandler(dim, finalMatrix, fabricObject) {
+    const x = (fabricObject.points[this.pointIndex].x - fabricObject.pathOffset.x);
+    const y = (fabricObject.points[this.pointIndex].y - fabricObject.pathOffset.y);
+    return fabric.util.transformPoint({ x: x, y: y },
+        fabric.util.multiplyTransformMatrices(fabricObject.canvas.viewportTransform,fabricObject.calcTransformMatrix()));
+}
+
+function getObjectSizeWithStroke(object) {
+    const stroke = new fabric.Point(
+        object.strokeUniform ? 1 / object.scaleX : 1, 
+        object.strokeUniform ? 1 / object.scaleY : 1
+    ).multiply(object.strokeWidth);
+    return new fabric.Point(object.width + stroke.x, object.height + stroke.y);
+}
+
+// define a function that will define what the control does
+// this function will be called on every mouse move after a control has been
+// clicked and is being dragged.
+// The function receive as argument the mouse event, the current trasnform object
+// and the current position in canvas coordinate
+// transform.target is a reference to the current object being transformed,
+function actionHandler(eventData, transform, x, y) {
+    const polygon = transform.target;
+    const currentControl = polygon.controls[polygon.__corner];
+    const mouseLocalPosition = polygon.toLocalPoint(new fabric.Point(x, y), 'center', 'center');
+    const polygonBaseSize = getObjectSizeWithStroke(polygon);
+    const size = polygon._getTransformedDimensions(0, 0);
+    const finalPointPosition = {x: mouseLocalPosition.x * polygonBaseSize.x / size.x + polygon.pathOffset.x,
+           y: mouseLocalPosition.y * polygonBaseSize.y / size.y + polygon.pathOffset.y};
+    polygon.points[currentControl.pointIndex] = finalPointPosition;
+    return true;
+}
+
+// define a function that can keep the polygon in the same position when we change its
+// width/height/top/left.
+function anchorWrapper(anchorIndex, fn) {
+    return function(eventData, transform, x, y) {
+        const fabricObject = transform.target;
+        const absolutePoint = fabric.util.transformPoint({x:(fabricObject.points[anchorIndex].x-fabricObject.pathOffset.x),
+            y: (fabricObject.points[anchorIndex].y - fabricObject.pathOffset.y),}, fabricObject.calcTransformMatrix());
+        const actionPerformed = fn(eventData, transform, x, y);
+        const newDim = fabricObject._setPositionDimensions({});
+        const polygonBaseSize = getObjectSizeWithStroke(fabricObject);
+        const newX = (fabricObject.points[anchorIndex].x - fabricObject.pathOffset.x) / polygonBaseSize.x;
+        const newY = (fabricObject.points[anchorIndex].y - fabricObject.pathOffset.y) / polygonBaseSize.y;
+        fabricObject.setPositionByOrigin(absolutePoint, newX + 0.5, newY + 0.5);
+        return actionPerformed;
+    }
+}
+
+function Edit() {
+    // clone what are you copying since you may want copy and paste on different moment.
+    // and you do not want the changes happened later to reflect on the copy.
+    const objectsInGroup = canvas.getActiveObjects();
+    const poly = objectsInGroup[0];
+    //const poly = canvas.getObjects()[0];
+    if(poly){
+        canvas.setActiveObject(poly);
+        poly.edit = !poly.edit;
+        if (poly.edit) {
+            var lastControl = poly.points.length - 1;
+            poly.cornerStyle = 'circle';
+            poly.cornerColor = 'rgba(0,0,255,0.5)';
+            poly.controls = poly.points.reduce(function(acc, point, index) {
+                acc['p' + index] = new fabric.Control({
+                    positionHandler: polygonPositionHandler,
+                    actionHandler: anchorWrapper(index > 0 ? index - 1 : lastControl, actionHandler),
+                    actionName: 'modifyPolygon',
+                    pointIndex: index
+                });
+                return acc;
+            }, { });
+        } else {
+            poly.cornerColor = 'blue';
+            poly.cornerStyle = 'rect';
+            poly.controls = fabric.Object.prototype.controls;
+        }
+        poly.hasBorders = !poly.edit;
+        canvas.requestRenderAll();
+    }
+}
+
+</script>
+</body>
+</html>
